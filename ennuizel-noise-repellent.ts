@@ -241,9 +241,6 @@ const plugin: ennuizel.Plugin = {
 // Register the plugin
 Ennuizel.registerPlugin(plugin);
 
-// Our array of noise repellent instances
-const nrInstances: any[] = [];
-
 /**
  * Noise Repellent options.
  */
