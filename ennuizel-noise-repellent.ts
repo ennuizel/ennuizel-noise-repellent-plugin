@@ -490,8 +490,16 @@ async function noiseRepellent(
 
                     // Noise reduction
                     for (const frame of fltp) {
-                        for (let i = 0; i < track.channels; i++)
-                            frame.data[i] = nrs[i].run(frame.data[i]).slice(0);
+                        for (let i = 0; i < track.channels; i++) {
+                            // Split up to avoid OOM
+                            const data = frame.data[i];
+                            for (let j = 0; j < data.length; j += track.sampleRate) {
+                                data.set(
+                                    nrs[i].run(data.subarray(j, j + track.sampleRate)),
+                                    j
+                                );
+                            }
+                        }
                     }
 
                     // Convert it back
