@@ -1,0 +1,22 @@
+{
+  "name": "ennuizel-noise-repellent-plugin",
+  "version": "1.0.0",
+  "description": "A plugin to add a noise-repellent.js filter to Ennuizel",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ennuizel/ennuizel-noise-repellent-plugin.git"
+  },
+  "author": "Yahweasel",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/ennuizel/ennuizel-noise-repellent-plugin/issues"
+  },
+  "homepage": "https://github.com/ennuizel/ennuizel-noise-repellent-plugin#readme",
+  "dependencies": {
+    "typescript": "^4.4.4"
+  }
+}
