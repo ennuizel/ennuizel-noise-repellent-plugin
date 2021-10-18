@@ -362,6 +362,7 @@ async function uiNoiseRepellent(d: ennuizel.ui.Dialog) {
                         opts[key] = +el.value;
                 }
 
+                Ennuizel.undoPoint();
                 await noiseRepellent(opts, Ennuizel.select.getSelection(), d);
             }, {
                 reuse: d
