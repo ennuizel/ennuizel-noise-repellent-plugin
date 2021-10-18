@@ -299,8 +299,9 @@ async function load() {
     // Figure out where to load noise-repellent.js
     const nrURL = new URL(plugin.url);
     const base = nrURL.pathname.replace(/\/[^\/]*$/, "");
+    nrURL.pathname = base;
+    NoiseRepellent = {base: nrURL.toString()};
     nrURL.pathname = base + "/noise-repellent-m.js";
-    NoiseRepellent = {base};
 
     // Load it
     await Ennuizel.ui.loadLibrary(nrURL.toString());
