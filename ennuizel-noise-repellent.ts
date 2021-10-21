@@ -363,7 +363,10 @@ async function uiNoiseRepellent(d: ennuizel.ui.Dialog) {
                 }
 
                 Ennuizel.undoPoint();
-                await noiseRepellent(opts, Ennuizel.select.getSelection(), d);
+                await Ennuizel.filters.selectionFilter(
+                    x => noiseRepellent(x, opts), false,
+                    Ennuizel.select.getSelection(), d
+                );
             }, {
                 reuse: d
             });
@@ -378,181 +381,88 @@ async function uiNoiseRepellent(d: ennuizel.ui.Dialog) {
 
 /**
  * Noise repellent filter implementation.
+ * @param stream  Stream to filter.
  * @param opts  Noise repellent options.
- * @param sel  Selection to filter.
- * @param d  Dialog to show progress.
  */
 async function noiseRepellent(
-    opts: Record<string, number>, sel: ennuizel.select.Selection,
-    d: ennuizel.ui.Dialog
+    stream: ennuizel.EZStream<ennuizel.LibAVFrame>,
+    opts: Record<string, number>
 ) {
-    // Get the audio tracks
-    const tracks = <ennuizel.track.AudioTrack[]>
-        sel.tracks.filter(x => x.type() === Ennuizel.TrackType.Audio);
-
-    if (tracks.length === 0)
-        return;
-
-    if (d)
-        d.box.innerHTML = "Filtering...";
-
-    // Make the stream options
-    const streamOpts = {
-        start: sel.range ? sel.start : void 0,
-        end: sel.range ? sel.end : void 0
-    };
-
-    // Make the status
-    const status = tracks.map(x => ({
-        name: x.name,
-        filtered: 0,
-        duration: x.sampleCount()
-    }));
-
-    // Function to show the current status
-    function showStatus() {
-        if (d) {
-            const statusStr = status.map(x =>
-                x.name + ": " + Math.round(x.filtered / x.duration * 100) + "%")
-            .join("<br/>");
-            d.box.innerHTML = "Filtering...<br/>" + statusStr;
-        }
-    }
-
-    // The filtering function for each track
-    async function filterThread(track: ennuizel.track.AudioTrack, idx: number) {
-        // Make one NoiseRepellent instance per channel
-        const nrs: any[] = [];
-        for (let i = 0; i < track.channels; i++)
-            nrs.push(await NoiseRepellent.NoiseRepellent(track.sampleRate));
-
-        // Initialize them
-        for (const nr of nrs) {
-            for (const opt of NoiseRepellentOptions) {
-                if (opt.id in opts)
-                    nr.set(NoiseRepellent[opt.id], opts[opt.id]);
-                else
-                    nr.set(NoiseRepellent[opt.id], opt.value);
-            }
-            nr.set(NoiseRepellent.N_ADAPTIVE, 1);
-            nr.set(NoiseRepellent.ENABLE, 1);
-        }
-
-        // Figure out the latency
-        nrs[0].run(new Float32Array(track.sampleRate));
-        const latency: number = nrs[0].latency;
-
-        // Make a libav instance
-        const libav = await LibAV.LibAV();
-
-        // We need two filters: one to convert to FLTP, and one to convert back.
-        const channelLayout = (track.channels === 1) ? 4 : ((1<<track.channels)-1);
-        const frame = await libav.av_frame_alloc();
-        const [, src1, sink1] =
-            await libav.ff_init_filter_graph("apad=pad_len=" + latency, {
-                sample_rate: track.sampleRate,
-                sample_fmt: track.format,
-                channel_layout: channelLayout
-            }, {
-                sample_rate: track.sampleRate,
-                sample_fmt: Ennuizel.LibAVSampleFormat.FLTP,
-                channel_layout: channelLayout
-            });
-        const [, src2, sink2] =
-            await libav.ff_init_filter_graph("atrim=start_pts=" + latency, {
-                sample_rate: track.sampleRate,
-                sample_fmt: Ennuizel.LibAVSampleFormat.FLTP,
-                channel_layout: channelLayout,
-            }, {
-                sample_rate: track.sampleRate,
-                sample_fmt: track.format,
-                channel_layout: channelLayout
-            });
-
-        // Input stream
-        const inStream = track.stream(Object.assign({keepOpen: true}, streamOpts)).getReader();
-
-        // Filter stream
-        const filterStream = new Ennuizel.ReadableStream({
-            async pull(controller) {
-                while (true) {
-                    // Get some data
-                    const inp = await inStream.read();
-                    if (inp.value)
-                        inp.value.node = null;
-
-                    // Convert it to FLTP
-                    const fltp = await libav.ff_filter_multi(
-                        src1, sink1, frame,
-                        inp.done ? [] : [inp.value], inp.done);
-
-                    // Noise reduction
-                    for (const frame of fltp) {
-                        for (let i = 0; i < track.channels; i++) {
-                            // Split up to avoid OOM
-                            const data = frame.data[i];
-                            for (let j = 0; j < data.length; j += track.sampleRate) {
-                                data.set(
-                                    nrs[i].run(data.subarray(j, j + track.sampleRate)),
-                                    j
-                                );
-                            }
-                        }
-                    }
-
-                    // Convert it back
-                    const outp = await libav.ff_filter_multi(
-                        src2, sink2, frame,
-                        fltp, inp.done);
-
-                    // Update the status
-                    if (inp.done)
-                        status[idx].filtered = status[idx].duration;
-                    else
-                        status[idx].filtered += inp.value.data.length;
-                    showStatus();
-
-                    // Write it out
-                    for (const part of outp)
-                        controller.enqueue(part.data);
-
-                    // Maybe end it
-                    if (inp.done)
-                        controller.close();
-
-                    if (outp.length || inp.done)
-                        break;
-                }
+    // Get the first chunk for statistics
+    const first = await stream.read();
+    if (!first) {
+        return new Ennuizel.ReadableStream({
+            start(controller) {
+                controller.close();
             }
         });
-
-        // Overwrite the track
-        await track.overwrite(filterStream, Object.assign({closeTwice: true}, streamOpts));
-
-        // And get rid of the libav instance
-        libav.terminate();
     }
+    stream.push(first);
 
-    // Number of threads to run at once
-    const threads = navigator.hardwareConcurrency ? navigator.hardwareConcurrency : 2;
+    // Make one NoiseRepellent instance per channel
+    const nrs: any[] = [];
+    for (let i = 0; i < first.channels; i++)
+        nrs.push(await NoiseRepellent.NoiseRepellent(first.sample_rate));
 
-    // Current state
-    const running: Promise<unknown>[] = [];
-    const toRun = tracks.map((x, idx) => <[ennuizel.track.AudioTrack, number]> [x, idx]);
-
-    // Run
-    while (toRun.length) {
-        // Get the right number of threads running
-        while (running.length < threads && toRun.length) {
-            const [sel, idx] = toRun.shift();
-            running.push(filterThread(sel, idx));
+    // Initialize them
+    for (const nr of nrs) {
+        for (const opt of NoiseRepellentOptions) {
+            if (opt.id in opts)
+                nr.set(NoiseRepellent[opt.id], opts[opt.id]);
+            else
+                nr.set(NoiseRepellent[opt.id], opt.value);
         }
-
-        // Wait for one to finish to make room for more
-        const fin = await Promise.race(running.map((x, idx) => x.then(() => idx)));
-        running.splice(fin, 1);
+        nr.set(NoiseRepellent.N_ADAPTIVE, 1);
+        nr.set(NoiseRepellent.ENABLE, 1);
     }
 
-    // Wait for them all to finish
-    await Promise.all(running);
+    // Figure out the latency
+    nrs[0].run(new Float32Array(first.sample_rate));
+    const latency: number = nrs[0].latency;
+
+    /* We need three filters: one to convert to FLTP, one to denoise, and one
+     * to convert back. */
+    const toFltStr = await Ennuizel.filters.resample(stream, first.sample_rate,
+        Ennuizel.LibAVSampleFormat.FLTP, first.channels,
+        "apad=pad_len=" + latency);
+    const toFlt = toFltStr.getReader();
+
+    // Filter stream
+    const filterStream = new Ennuizel.ReadableStream({
+        async pull(controller) {
+            while (true) {
+                // Get some data
+                const inp = await toFlt.read();
+                if (inp.done) {
+                    controller.close();
+                    break;
+                }
+                const frame = inp.value;
+
+                // Noise reduction
+                for (let i = 0; i < first.channels; i++) {
+                    // Split up to avoid OOM
+                    const data = (<any> frame.data)[i];
+                    for (let j = 0; j < data.length; j += first.sample_rate) {
+                        data.set(
+                            nrs[i].run(data.subarray(j, j + first.sample_rate)),
+                            j
+                        );
+                    }
+                }
+
+                // Write it out
+                controller.enqueue(frame);
+                break;
+            }
+        }
+    });
+
+    // Back to the original format
+    const fromFlt = await Ennuizel.filters.resample(
+        new Ennuizel.EZStream(filterStream), first.sample_rate, first.format,
+        first.channels, "atrim=start_pts=" + latency
+    );
+
+    return fromFlt;
 }
